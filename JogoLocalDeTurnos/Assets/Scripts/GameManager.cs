@@ -8,13 +8,16 @@ using UnityEngine.UI;
 
 public class GameManager : MonoBehaviour
 {
-    [SerializeField] GameObject red, green;
-    [SerializeField] Text turnMessage;
+    [SerializeField]
+    GameObject red, green;
 
     bool isPlayer, hasGameFinished, playerIsRed;
 
-    const string RED_MESSAGE = "Red's Turn";
-    const string GREEN_MESSAGE = "Green's Turn";
+    [SerializeField]
+    Text turnMessage;
+
+    const string RED_MESSAGE = "Vez do Vermelho";
+    const string GREEN_MESSAGE = "Vez do Verde";
 
     Color RED_COLOR = new Color(231, 29, 54, 255) / 255f;
     Color GREEN_COLOR = new Color(0, 222, 1, 255) / 255f;
@@ -24,15 +27,13 @@ public class GameManager : MonoBehaviour
     // Configurações P2P
     TcpListener server;
     Thread listenThread;
-    int listenPort = 5050;
-    string otherIp = "10.57.10.25"; // Troque para o IP do outro PC na rede local
-    volatile bool running = true;
+    int listenPort = 5050; // Porta para escutar conexões
+    string otherIp = "10.57.10.25"; // IP do outro peer (troque para o IP real)
 
-    void Awake()
+    private void Awake()
     {
-        // Defina o jogador antes de iniciar! (no PlayerPreferences)
         playerIsRed = PlayerPreferences.Instance.IsPlayerRed;
-        isPlayer = playerIsRed; // Vermelho começa
+        isPlayer = playerIsRed; // vermelho começa
         hasGameFinished = false;
         turnMessage.text = RED_MESSAGE;
         turnMessage.color = RED_COLOR;
@@ -51,13 +52,8 @@ public class GameManager : MonoBehaviour
                 server.Start();
                 Debug.Log("[P2P] Servidor iniciado na porta " + listenPort);
 
-                while (running)
+                while (true)
                 {
-                    if (!server.Pending())
-                    {
-                        Thread.Sleep(100);
-                        continue;
-                    }
                     TcpClient client = server.AcceptTcpClient();
                     NetworkStream stream = client.GetStream();
 
@@ -106,7 +102,7 @@ public class GameManager : MonoBehaviour
         }
     }
 
-    void Update()
+    private void Update()
     {
         if (Input.GetMouseButtonDown(0))
         {
@@ -134,9 +130,9 @@ public class GameManager : MonoBehaviour
             myBoard.UpdateBoard(coluna, playerIsRed);
             SendMove(coluna);
 
-            if (myBoard.Result(playerIsRed))
+            if (myBoard.Result())
             {
-                turnMessage.text = (playerIsRed ? "Red" : "Green") + " Wins!";
+                turnMessage.text = (playerIsRed ? "Vermelho" : "Verde") + " Ganhou!";
                 hasGameFinished = true;
                 return;
             }
@@ -166,19 +162,20 @@ public class GameManager : MonoBehaviour
         Vector3 spawnPos = colObj.spawnLocation;
         Vector3 targetPos = colObj.targetlocation;
 
-        // O círculo é da cor do oponente
         GameObject circle = Instantiate(playerIsRed ? green : red);
         circle.transform.position = spawnPos;
         circle.GetComponent<Mover>().targetPostion = targetPos;
 
         colObj.targetlocation += new Vector3(0, 0.7f, 0);
 
-        myBoard.UpdateBoard(coluna, !playerIsRed);
+        // Jogada do oponente é da cor contrária 
+        bool jogadaFoiDoOponente = !playerIsRed;
+        myBoard.UpdateBoard(coluna, jogadaFoiDoOponente);
 
-        if (myBoard.Result(!playerIsRed))
+        if (myBoard.Result())
         {
-            string vencedor = playerIsRed ? "Green" : "Red";
-            turnMessage.text = vencedor + " Wins!";
+            string vencedor = playerIsRed ? "Verde" : "Vermelho";
+            turnMessage.text = vencedor + " Ganhou!";
             hasGameFinished = true;
             return;
         }
@@ -188,9 +185,13 @@ public class GameManager : MonoBehaviour
         turnMessage.color = playerIsRed ? RED_COLOR : GREEN_COLOR;
     }
 
-    void OnApplicationQuit()
+    private void OnApplicationQuit()
     {
-        running = false;
-        server?.Stop();
+        try
+        {
+            server?.Stop();
+            listenThread?.Abort();
+        }
+        catch { }
     }
 }

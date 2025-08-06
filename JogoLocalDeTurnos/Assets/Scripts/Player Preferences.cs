@@ -3,7 +3,8 @@ using UnityEngine;
 public class PlayerPreferences : MonoBehaviour
 {
     public static PlayerPreferences Instance { get; private set; }
-    public bool IsPlayerRed { get; private set; } = true; // Defina antes de iniciar a partida!
+
+    public bool IsPlayerRed { get; private set; } = true;
 
     void Awake()
     {
@@ -18,6 +19,13 @@ public class PlayerPreferences : MonoBehaviour
         }
     }
 
-    public void SetPlayerAsRed() => IsPlayerRed = true;
-    public void SetPlayerAsGreen() => IsPlayerRed = false;
+    public void SetPlayerAsRed()
+    {
+        IsPlayerRed = true;
+    }
+
+    public void SetPlayerAsGreen()
+    {
+        IsPlayerRed = false;
+    }
 }
