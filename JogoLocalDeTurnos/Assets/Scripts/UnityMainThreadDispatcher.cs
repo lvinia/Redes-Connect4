@@ -1,25 +1,18 @@
 using System;
-using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 
 public class UnityMainThreadDispatcher : MonoBehaviour
 {
     private static readonly Queue<Action> _executionQueue = new Queue<Action>();
-
     private static UnityMainThreadDispatcher _instance = null;
 
-    public static bool Exists()
-    {
-        return _instance != null;
-    }
+    public static bool Exists() => _instance != null;
 
     public static UnityMainThreadDispatcher Instance()
     {
         if (!Exists())
-        {
             throw new Exception("UnityMainThreadDispatcher não existe na cena. Adicione este script em algum GameObject.");
-        }
         return _instance;
     }
 
@@ -47,15 +40,13 @@ public class UnityMainThreadDispatcher : MonoBehaviour
         }
     }
 
-   
     public void Enqueue(Action action)
     {
         if (action == null)
             throw new ArgumentNullException("action");
-
         lock (_executionQueue)
         {
             _executionQueue.Enqueue(action);
         }
     }
-}
+    }
