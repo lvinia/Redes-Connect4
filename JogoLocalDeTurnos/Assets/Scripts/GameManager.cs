@@ -28,7 +28,7 @@ public class GameManager : MonoBehaviour
     TcpListener server;
     Thread listenThread;
     int listenPort = 5050; // Porta para escutar conexões
-    string otherIp = "10.57.10.25"; // IP do outro peer (troque para o IP real)
+    string otherIp = "10.57.1.134"; // IP do outro peer (troque para o IP real)
 
     private void Awake()
     {
@@ -40,6 +40,13 @@ public class GameManager : MonoBehaviour
         myBoard = new Board();
 
         StartServer();
+
+        // Inicializa o VoiceChatUDP (UDP chat por voz)
+        VoiceChatUDP.Instance.peerIp = otherIp;
+        // A porta UDP pode ser diferente da TCP!
+        VoiceChatUDP.Instance.port = 5151;
+        // Começa a escutar UDP para voz
+        VoiceChatUDP.Instance.StartListening();
     }
 
     void StartServer()
@@ -136,6 +143,9 @@ public class GameManager : MonoBehaviour
                 hasGameFinished = true;
                 return;
             }
+
+            // Permite o envio de áudio de voz via UDP no turno do próprio jogador
+            VoiceChatUDP.Instance.StartRecording();
 
             isPlayer = false;
             turnMessage.text = playerIsRed ? GREEN_MESSAGE : RED_MESSAGE;
