@@ -24,29 +24,25 @@ public class GameManager : MonoBehaviour
 
     Board myBoard;
 
-    // Configurações P2P
+    // TCP P2P
     TcpListener server;
     Thread listenThread;
-    int listenPort = 5050; // Porta para escutar conexões
-    string otherIp = "10.57.1.134"; // IP do outro peer (troque para o IP real)
+    int listenPort = 5050;
+    string otherIp = "10.57.1.134"; // coloque o IP real
 
     private void Awake()
     {
         playerIsRed = PlayerPreferences.Instance.IsPlayerRed;
-        isPlayer = playerIsRed; // vermelho começa
+        isPlayer = playerIsRed;
         hasGameFinished = false;
         turnMessage.text = RED_MESSAGE;
         turnMessage.color = RED_COLOR;
         myBoard = new Board();
-
         StartServer();
 
-        // Inicializa o VoiceChatUDP (UDP chat por voz)
-        VoiceChatUDP.Instance.peerIp = otherIp;
-        // A porta UDP pode ser diferente da TCP!
-        VoiceChatUDP.Instance.port = 5151;
-        // Começa a escutar UDP para voz
-        VoiceChatUDP.Instance.StartListening();
+        // Inicializa configurações do VoiceChatUDP, mas NÃO chama nada automaticamente!
+        VoiceChatUDP.Instance.peerIp = otherIp; // mesmo peerIp pros testes
+        VoiceChatUDP.Instance.port = 5151;      // porta UDP definida
     }
 
     void StartServer()
@@ -144,9 +140,6 @@ public class GameManager : MonoBehaviour
                 return;
             }
 
-            // Permite o envio de áudio de voz via UDP no turno do próprio jogador
-            VoiceChatUDP.Instance.StartRecording();
-
             isPlayer = false;
             turnMessage.text = playerIsRed ? GREEN_MESSAGE : RED_MESSAGE;
             turnMessage.color = playerIsRed ? GREEN_COLOR : RED_COLOR;
@@ -178,7 +171,6 @@ public class GameManager : MonoBehaviour
 
         colObj.targetlocation += new Vector3(0, 0.7f, 0);
 
-        // Jogada do oponente é da cor contrária 
         bool jogadaFoiDoOponente = !playerIsRed;
         myBoard.UpdateBoard(coluna, jogadaFoiDoOponente);
 
@@ -203,5 +195,16 @@ public class GameManager : MonoBehaviour
             listenThread?.Abort();
         }
         catch { }
+    }
+
+    // -------- INTEGRE NA UI UMA CHAMADA MANUAL ao CHAT DE VOZ UDP: --------
+    // Exemplo de método público pra chamar no botão:
+    public void OnVoiceButtonClick()
+    {
+        // Inicia escuta UDP (se ainda não está escutando)
+        VoiceChatUDP.Instance.StartListening();
+
+        // Grava e envia 2 segundos de áudio
+        VoiceChatUDP.Instance.StartRecordingAndSend(2);
     }
 }
