@@ -8,13 +8,9 @@ using UnityEngine.UI;
 
 public class GameManager : MonoBehaviour
 {
-    [SerializeField]
-    GameObject red, green;
-
+    [SerializeField] GameObject red, green;
     bool isPlayer, hasGameFinished, playerIsRed;
-
-    [SerializeField]
-    Text turnMessage;
+    [SerializeField] Text turnMessage;
 
     const string RED_MESSAGE = "Vez do Vermelho";
     const string GREEN_MESSAGE = "Vez do Verde";
@@ -40,9 +36,19 @@ public class GameManager : MonoBehaviour
         myBoard = new Board();
         StartServer();
 
-        // Inicializa configurações do VoiceChatUDP, mas NÃO chama nada automaticamente!
-        VoiceChatUDP.Instance.peerIp = otherIp; // mesmo peerIp pros testes
-        VoiceChatUDP.Instance.port = 5151;      // porta UDP definida
+        // Garantir que exista uma instância VoiceChatUDP
+        if (VoiceChatUDP.Instance == null)
+        {
+            var go = new GameObject("VoiceChatUDP");
+            var v = go.AddComponent<VoiceChatUDP>();
+            v.peerIp = otherIp;
+            v.port = 5151;
+        }
+        else
+        {
+            VoiceChatUDP.Instance.peerIp = otherIp;
+            VoiceChatUDP.Instance.port = 5151;
+        }
     }
 
     void StartServer()
@@ -195,16 +201,5 @@ public class GameManager : MonoBehaviour
             listenThread?.Abort();
         }
         catch { }
-    }
-
-    // -------- INTEGRE NA UI UMA CHAMADA MANUAL ao CHAT DE VOZ UDP: --------
-    // Exemplo de método público pra chamar no botão:
-    public void OnVoiceButtonClick()
-    {
-        // Inicia escuta UDP (se ainda não está escutando)
-        VoiceChatUDP.Instance.StartListening();
-
-        // Grava e envia 2 segundos de áudio
-        VoiceChatUDP.Instance.StartRecordingAndSend(2);
     }
 }
