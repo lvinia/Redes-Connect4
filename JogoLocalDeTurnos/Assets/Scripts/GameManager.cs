@@ -8,19 +8,15 @@ using UnityEngine.UI;
 
 public class GameManager : MonoBehaviour
 {
-    [SerializeField]
-    GameObject red, green;
-
+    [SerializeField] GameObject red, green;
     bool isPlayer, hasGameFinished, playerIsRed;
-
-    [SerializeField]
-    Text turnMessage;
+    [SerializeField] Text turnMessage;
 
     const string RED_MESSAGE = "Vez do Vermelho";
     const string GREEN_MESSAGE = "Vez do Verde";
 
-    Color RED_COLOR = new Color(231f/255f, 29f/255f, 54f/255f, 1f);
-    Color GREEN_COLOR = new Color(0f/255f, 222f/255f, 1f/255f, 1f);
+    Color RED_COLOR = new Color(231, 29, 54, 255) / 255f;
+    Color GREEN_COLOR = new Color(0, 222, 1, 255) / 255f;
 
     Board myBoard;
 
@@ -28,7 +24,7 @@ public class GameManager : MonoBehaviour
     TcpListener server;
     Thread listenThread;
     int listenPort = 5050;
-    string otherIp = "10.57.1.134"; // coloque o IP real
+    string otherIp = "10.57.1.132"; // coloque o IP real
 
     private void Awake()
     {
@@ -68,45 +64,27 @@ public class GameManager : MonoBehaviour
                 while (true)
                 {
                     TcpClient client = server.AcceptTcpClient();
-                    using (NetworkStream stream = client.GetStream())
+                    NetworkStream stream = client.GetStream();
+
+                    byte[] buffer = new byte[1024];
+                    int bytesRead = stream.Read(buffer, 0, buffer.Length);
+                    string msg = Encoding.UTF8.GetString(buffer, 0, bytesRead);
+                    Debug.Log("[P2P] Mensagem recebida: " + msg);
+
+                    if (int.TryParse(msg, out int coluna))
                     {
-                        byte[] buffer = new byte[1024];
-                        int bytesRead = stream.Read(buffer, 0, buffer.Length);
-                        if (bytesRead <= 0)
-                        {
-                            stream.Close();
-                            client.Close();
-                            continue;
-                        }
-
-                        string msg = Encoding.UTF8.GetString(buffer, 0, bytesRead);
-                        Debug.Log("[P2P] Mensagem recebida: " + msg);
-
-                        if (int.TryParse(msg, out int coluna))
-                        {
-                            // Use a Enqueue estática (sem depender de Instance)
-                            UnityMainThreadDispatcher.Enqueue(() => JogadaRecebida(coluna));
-                        }
+                        // chama na main thread
+                        if (UnityMainThreadDispatcher.Exists())
+                            UnityMainThreadDispatcher.Instance().Enqueue(() => JogadaRecebida(coluna));
                     }
+
+                    stream.Close();
                     client.Close();
                 }
-            }
-            catch (SocketException se)
-            {
-                // Ocorre normalmente quando server.Stop() é chamado; apenas log de informação.
-                Debug.Log("[P2P] Listener finalizado (SocketException): " + se.Message);
-            }
-            catch (ThreadAbortException)
-            {
-                // não esperado, mas ignorar
             }
             catch (Exception e)
             {
                 Debug.LogError("[P2P] Erro no servidor: " + e.Message);
-            }
-            finally
-            {
-                server = null;
             }
         });
         listenThread.IsBackground = true;
@@ -117,16 +95,15 @@ public class GameManager : MonoBehaviour
     {
         try
         {
-            using (TcpClient client = new TcpClient())
-            {
-                client.Connect(otherIp, listenPort);
+            TcpClient client = new TcpClient();
+            client.Connect(otherIp, listenPort);
 
-                using (NetworkStream stream = client.GetStream())
-                {
-                    byte[] message = Encoding.UTF8.GetBytes(coluna.ToString());
-                    stream.Write(message, 0, message.Length);
-                }
-            }
+            NetworkStream stream = client.GetStream();
+            byte[] message = Encoding.UTF8.GetBytes(coluna.ToString());
+            stream.Write(message, 0, message.Length);
+
+            stream.Close();
+            client.Close();
 
             Debug.Log("[P2P] Jogada enviada: " + coluna);
         }
@@ -183,9 +160,9 @@ public class GameManager : MonoBehaviour
 
         Column[] columns;
 #if UNITY_2023_1_OR_NEWER
-        columns = UnityEngine.Object.FindObjectsByType<Column>(FindObjectsSortMode.None);
+        columns = UnityEngine.Object.FindObjectsByType<Column>(UnityEngine.FindObjectsSortMode.None);
 #else
-        columns = FindObjectsOfType<Column>();
+        columns = UnityEngine.Object.FindObjectsOfType<Column>();
 #endif
 
         Column colObj = null;
@@ -229,29 +206,8 @@ public class GameManager : MonoBehaviour
         try
         {
             server?.Stop();
-            if (listenThread != null && listenThread.IsAlive)
-            {
-                // aceitar que o listener lance ao fechar o socket; aguardar término
-                listenThread.Join(500);
-            }
+            listenThread?.Abort();
         }
-        catch (Exception ex)
-        {
-            Debug.LogWarning("Erro ao encerrar servidor P2P: " + ex.Message);
-        }
-    }
-
-    // -------- INTEGRE NA UI UMA CHAMADA MANUAL ao CHAT DE VOZ UDP: --------
-    // Exemplo de método público pra chamar no botão:
-    public void OnVoiceButtonClick()
-    {
-        // Inicia escuta UDP (se ainda não está escutando)
-        VoiceChatUDP.Instance?.StartListening();
-
-        // Grava e envia 2 segundos de áudio (caso queira botão único)
-        VoiceChatUDP.Instance?.BeginRecording();
-        // Para enviar direto após X segs seria necessário chamar EndRecordingAndSend() depois
+        catch { }
     }
 }
-
-
