@@ -1,64 +1,39 @@
 using System;
-using System.Collections;
-using System.Collections.Generic;
+using System.Collections.Concurrent;
 using UnityEngine;
 
 public class UnityMainThreadDispatcher : MonoBehaviour
 {
-    private static readonly Queue<Action> _executionQueue = new Queue<Action>();
+    private static UnityMainThreadDispatcher _instance;
+    private static readonly ConcurrentQueue<Action> _queue = new ConcurrentQueue<Action>();
 
-    private static UnityMainThreadDispatcher _instance = null;
-
-    public static bool Exists()
+    public static void Initialize()
     {
-        return _instance != null;
+        if (_instance != null) return;
+
+        var obj = new GameObject("UnityMainThreadDispatcher");
+        _instance = obj.AddComponent<UnityMainThreadDispatcher>();
+        DontDestroyOnLoad(obj);
     }
 
-    public static UnityMainThreadDispatcher Instance()
+    public static void Enqueue(Action action)
     {
-        if (!Exists())
-        {
-            throw new Exception("UnityMainThreadDispatcher não existe na cena. Adicione este script em algum GameObject.");
-        }
-        return _instance;
+        if (action == null) return;
+        _queue.Enqueue(action);
     }
 
-    void Awake()
+    private void Update()
     {
-        if (_instance == null)
+        while (_queue.TryDequeue(out var action))
         {
-            _instance = this;
-            DontDestroyOnLoad(gameObject);
-        }
-        else
-        {
-            Destroy(gameObject);
-        }
-    }
-
-    void Update()
-    {
-        lock (_executionQueue)
-        {
-            while (_executionQueue.Count > 0)
+            try
             {
-                _executionQueue.Dequeue().Invoke();
+                action?.Invoke();
             }
-        }
-    }
-
-    /// <summary>
-    /// Enfileira uma ação para ser executada na thread principal no próximo frame.
-    /// </summary>
-    /// <param name="action"></param>
-    public void Enqueue(Action action)
-    {
-        if (action == null)
-            throw new ArgumentNullException("action");
-
-        lock (_executionQueue)
-        {
-            _executionQueue.Enqueue(action);
+            catch (Exception e)
+            {
+                Debug.LogError("Dispatcher exception: " + e);
+            }
         }
     }
 }

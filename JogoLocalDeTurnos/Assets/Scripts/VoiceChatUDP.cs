@@ -5,13 +5,6 @@ using System.Net.Sockets;
 using System.Threading;
 using UnityEngine;
 
-/// <summary>
-/// VoiceChatUDP com fragmentação e reassemblagem (push-to-talk).
-/// Uso:
-/// - BeginRecording() em PointerDown
-/// - EndRecordingAndSend() em PointerUp
-/// Certifique-se que ambos peers têm uma instância deste script ativa e que peerIp/port estão corretos.
-/// </summary>
 public class VoiceChatUDP : MonoBehaviour
 {
     public static VoiceChatUDP Instance;
@@ -28,11 +21,21 @@ public class VoiceChatUDP : MonoBehaviour
     volatile bool isRecording = false;
 
     // Reassemblies: messageId -> entry
+    class ReassemblyEntry
+    {
+        public int TotalPackets;
+        public DateTime FirstSeen;
+        public Dictionary<int, byte[]> Fragments = new Dictionary<int, byte[]>();
+    }
+
     readonly Dictionary<uint, ReassemblyEntry> reassemblies = new Dictionary<uint, ReassemblyEntry>();
     readonly object reassemblyLock = new object();
 
-    // Limpeza de reassemblies antigos
+    // Cleanup
     const int REASSEMBLY_TIMEOUT_SECONDS = 10;
+
+    // Cancellation
+    CancellationTokenSource listenerCts;
 
     void Awake()
     {
@@ -51,19 +54,18 @@ public class VoiceChatUDP : MonoBehaviour
         }
     }
 
-    // Listener UDP (roda em thread)
     public void StartListening()
     {
         if (listenerThread != null && listenerThread.IsAlive) return;
 
-        listenerThread = new Thread(() =>
-        {
+        listenerCts = new CancellationTokenSource();
+        listenerThread = new Thread(() => {
             try
             {
                 using (var udp = new UdpClient(port))
                 {
                     IPEndPoint remoteEp = new IPEndPoint(IPAddress.Any, 0);
-                    while (true)
+                    while (!listenerCts.Token.IsCancellationRequested)
                     {
                         try
                         {
@@ -71,9 +73,9 @@ public class VoiceChatUDP : MonoBehaviour
                             if (data == null || data.Length < 8) continue; // header mínimo
 
                             // Parse header: [uint messageId (4)] [ushort totalPackets (2)] [ushort packetIndex (2)]
-                            uint messageId = BitConverter.ToUInt32(data, 0);
-                            ushort totalPackets = BitConverter.ToUInt16(data, 4);
-                            ushort packetIndex = BitConverter.ToUInt16(data, 6);
+                            uint messageId = (uint)(data[0] | (data[1] << 8) | (data[2] << 16) | (data[3] << 24));
+                            ushort totalPackets = (ushort)(data[4] | (data[5] << 8));
+                            ushort packetIndex = (ushort)(data[6] | (data[7] << 8));
 
                             int payloadLen = data.Length - 8;
                             byte[] payload = new byte[payloadLen];
@@ -86,6 +88,10 @@ public class VoiceChatUDP : MonoBehaviour
                     }
                 }
             }
+            catch (SocketException se)
+            {
+                Debug.Log("[VoiceChatUDP] Listener stopped: " + se.Message);
+            }
             catch (Exception ex)
             {
                 Debug.LogError("[VoiceChatUDP] Listener fatal: " + ex.Message);
@@ -93,6 +99,23 @@ public class VoiceChatUDP : MonoBehaviour
         })
         { IsBackground = true };
         listenerThread.Start();
+    }
+
+    public void StopListening()
+    {
+        try
+        {
+            listenerCts?.Cancel();
+            // fechar sockets será feito pelo using quando o thread terminar
+            if (listenerThread != null && listenerThread.IsAlive)
+            {
+                listenerThread.Join(300);
+            }
+        }
+        catch (Exception ex)
+        {
+            Debug.LogWarning("[VoiceChatUDP] Erro ao parar listener: " + ex.Message);
+        }
     }
 
     // Begin recording (push-to-talk start)
@@ -148,38 +171,55 @@ public class VoiceChatUDP : MonoBehaviour
         byte[] allBytes = new byte[pcm16.Length * sizeof(short)];
         Buffer.BlockCopy(pcm16, 0, allBytes, 0, allBytes.Length);
 
-        // Fragmentar e enviar
+        // Fragmentar e enviar em thread pool
         ThreadPool.QueueUserWorkItem((_) =>
         {
             try
             {
                 using (var udp = new UdpClient())
                 {
-                    // message id único
+                    // message id único (uint)
                     uint messageId = (uint)UnityEngine.Random.Range(int.MinValue, int.MaxValue);
-                    int payloadPerPacket = maxPayloadSize; // já exclui header
-                    int totalPackets = (allBytes.Length + payloadPerPacket - 1) / payloadPerPacket;
+                    int payloadPerPacket = maxPayloadSize;
+                    int totalPacketsInt = (allBytes.Length + payloadPerPacket - 1) / payloadPerPacket;
 
-                    for (int i = 0; i < totalPackets; i++)
+                    if (totalPacketsInt > ushort.MaxValue)
                     {
+                        Debug.LogError("[VoiceChatUDP] Mensagem muito grande, abortando envio. Reduza duração ou sampleRate.");
+                        return;
+                    }
+
+                    ushort totalPackets = (ushort)totalPacketsInt;
+
+                    for (int i = 0; i < totalPacketsInt; i++)
+                    {
+                        ushort packetIndex = (ushort)i;
+
                         int offset = i * payloadPerPacket;
                         int size = Math.Min(payloadPerPacket, allBytes.Length - offset);
 
-                        // header
-                        byte[] header = new byte[8];
-                        Array.Copy(BitConverter.GetBytes(messageId), 0, header, 0, 4);
-                        Array.Copy(BitConverter.GetBytes((ushort)totalPackets), 0, header, 4, 2);
-                        Array.Copy(BitConverter.GetBytes((ushort)i), 0, header, 6, 2);
-
+                        // header: 4 + 2 + 2 = 8 bytes
                         byte[] packet = new byte[8 + size];
-                        Array.Copy(header, 0, packet, 0, 8);
-                        Array.Copy(allBytes, offset, packet, 8, size);
+
+                        // messageId (uint) little-endian
+                        packet[0] = (byte)(messageId & 0xFF);
+                        packet[1] = (byte)((messageId >> 8) & 0xFF);
+                        packet[2] = (byte)((messageId >> 16) & 0xFF);
+                        packet[3] = (byte)((messageId >> 24) & 0xFF);
+
+                        // totalPackets (ushort) little-endian
+                        packet[4] = (byte)(totalPackets & 0xFF);
+                        packet[5] = (byte)((totalPackets >> 8) & 0xFF);
+
+                        // packetIndex (ushort) little-endian
+                        packet[6] = (byte)(packetIndex & 0xFF);
+                        packet[7] = (byte)((packetIndex >> 8) & 0xFF);
+
+                        Buffer.BlockCopy(allBytes, offset, packet, 8, size);
 
                         udp.Send(packet, packet.Length, peerIp, port);
                     }
                 }
-
-                Debug.Log($"[VoiceChatUDP] Áudio enviado: {allBytes.Length} bytes em {Math.Ceiling((double)allBytes.Length / maxPayloadSize)} pacotes.");
             }
             catch (Exception ex)
             {
@@ -188,123 +228,76 @@ public class VoiceChatUDP : MonoBehaviour
         });
     }
 
-    // Recebe um pacote fragmentado
     void HandleReceivedPacket(uint messageId, ushort totalPackets, ushort packetIndex, byte[] payload)
     {
         lock (reassemblyLock)
         {
             if (!reassemblies.TryGetValue(messageId, out var entry))
             {
-                entry = new ReassemblyEntry(totalPackets);
+                entry = new ReassemblyEntry { TotalPackets = totalPackets, FirstSeen = DateTime.UtcNow };
                 reassemblies[messageId] = entry;
             }
 
-            // ignore se já recebido esse índice
-            if (!entry.parts.ContainsKey(packetIndex))
-            {
-                entry.parts[packetIndex] = payload;
-                entry.received++;
-                entry.lastUpdate = DateTime.UtcNow;
-            }
+            // store fragment
+            entry.Fragments[(int)packetIndex] = payload;
 
-            if (entry.received >= entry.total)
+            // check if complete
+            if (entry.Fragments.Count == entry.TotalPackets)
             {
-                // reconstruir em ordem
-                int totalBytes = 0;
-                for (int i = 0; i < entry.total; i++)
-                    totalBytes += entry.parts[i].Length;
-
-                byte[] all = new byte[totalBytes];
-                int pos = 0;
-                for (int i = 0; i < entry.total; i++)
+                // reconstruct
+                int totalLen = 0;
+                for (int i = 0; i < entry.TotalPackets; i++)
                 {
-                    byte[] part = entry.parts[i];
-                    Array.Copy(part, 0, all, pos, part.Length);
-                    pos += part.Length;
+                    totalLen += entry.Fragments[i].Length;
                 }
 
-                // remover entrada
-                reassemblies.Remove(messageId);
+                byte[] all = new byte[totalLen];
+                int ptr = 0;
+                for (int i = 0; i < entry.TotalPackets; i++)
+                {
+                    var frag = entry.Fragments[i];
+                    Buffer.BlockCopy(frag, 0, all, ptr, frag.Length);
+                    ptr += frag.Length;
+                }
 
-                // converter bytes -> short[] -> float[] e reproduzir na thread principal
-                int shortCount = all.Length / sizeof(short);
-                short[] pcm16 = new short[shortCount];
+                // converter bytes para short[] e tocar
+                short[] pcm16 = new short[all.Length / 2];
                 Buffer.BlockCopy(all, 0, pcm16, 0, all.Length);
 
-                float[] samples = new float[shortCount];
-                for (int i = 0; i < shortCount; i++)
+                float[] samples = new float[pcm16.Length];
+                for (int i = 0; i < pcm16.Length; i++)
                     samples[i] = pcm16[i] / (float)short.MaxValue;
 
-                // Play clip na thread principal usando dispatcher
-                if (UnityMainThreadDispatcher.Exists())
-                {
-                    UnityMainThreadDispatcher.Instance().Enqueue(() => PlayClip(samples));
-                }
+                // criar clip e tocar
+                AudioClip clip = AudioClip.Create("vc_incoming", samples.Length, 1, sampleRate, false);
+                clip.SetData(samples, 0);
+                UnityMainThreadDispatcher.Enqueue(() => { audioSource.PlayOneShot(clip); });
+
+                // remover reassembly
+                reassemblies.Remove(messageId);
             }
         }
     }
 
-    void PlayClip(float[] samples)
-    {
-        try
-        {
-            AudioClip clip = AudioClip.Create("UDPVoice", samples.Length, 1, sampleRate, false);
-            clip.SetData(samples, 0);
-            audioSource.Stop();
-            audioSource.clip = clip;
-            audioSource.Play();
-        }
-        catch (Exception ex)
-        {
-            Debug.LogError("[VoiceChatUDP] PlayClip erro: " + ex.Message);
-        }
-    }
-
-    // Limpeza periódica de reassemblies antigos
     void StartCleanupThread()
     {
-        Thread t = new Thread(() =>
+        ThreadPool.QueueUserWorkItem(_ =>
         {
             while (true)
             {
-                Thread.Sleep(2000);
+                Thread.Sleep(1000);
                 lock (reassemblyLock)
                 {
                     var keys = new List<uint>(reassemblies.Keys);
-                    var now = DateTime.UtcNow;
                     foreach (var k in keys)
                     {
-                        if ((now - reassemblies[k].lastUpdate).TotalSeconds > REASSEMBLY_TIMEOUT_SECONDS)
+                        if ((DateTime.UtcNow - reassemblies[k].FirstSeen).TotalSeconds > REASSEMBLY_TIMEOUT_SECONDS)
+                        {
                             reassemblies.Remove(k);
+                        }
                     }
                 }
             }
-        })
-        { IsBackground = true };
-        t.Start();
-    }
-
-    private void OnApplicationQuit()
-    {
-        try
-        {
-            if (listenerThread != null && listenerThread.IsAlive) listenerThread.Abort();
-        }
-        catch { }
-    }
-
-    class ReassemblyEntry
-    {
-        public ushort total;
-        public int received;
-        public Dictionary<ushort, byte[]> parts = new Dictionary<ushort, byte[]>();
-        public DateTime lastUpdate;
-
-        public ReassemblyEntry(ushort total)
-        {
-            this.total = total;
-            received = 0;
-            lastUpdate = DateTime.UtcNow;
-        }
+        });
     }
 }
