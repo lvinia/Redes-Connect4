@@ -7,13 +7,13 @@ public class UnityMainThreadDispatcher : MonoBehaviour
     private static readonly Queue<Action> _executionQueue = new Queue<Action>();
     private static UnityMainThreadDispatcher _instance = null;
 
-    // Verifica existência (usado pelo VoiceChatUDP)
+    // Verifica existência
     public static bool Exists()
     {
         return _instance != null;
     }
 
-    // Retorna instância (usado pelo resto do código)
+    // Retorna instância (Método para obter o Singleton)
     public static UnityMainThreadDispatcher Instance()
     {
         if (!Exists())

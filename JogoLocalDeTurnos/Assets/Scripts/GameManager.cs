@@ -5,6 +5,7 @@ using System.Text;
 using System.Threading;
 using UnityEngine;
 using UnityEngine.UI;
+using UnityEngine.SceneManagement; // Adicionado para carregar cenas
 
 public class GameManager : MonoBehaviour
 {
@@ -82,9 +83,17 @@ public class GameManager : MonoBehaviour
                     client.Close();
                 }
             }
+            catch (SocketException se)
+            {
+                // CORRIGIDO: Garante que o log de erro seja executado na Main Thread
+                if (UnityMainThreadDispatcher.Exists())
+                    UnityMainThreadDispatcher.Instance().Enqueue(() => Debug.LogWarning("[P2P] Listener finalizado (SocketException): " + se.Message));
+            }
             catch (Exception e)
             {
-                Debug.LogError("[P2P] Erro no servidor: " + e.Message);
+                // CORRIGIDO: Garante que o log de erro seja executado na Main Thread
+                if (UnityMainThreadDispatcher.Exists())
+                    UnityMainThreadDispatcher.Instance().Enqueue(() => Debug.LogError("[P2P] Erro no servidor: " + e.Message));
             }
         });
         listenThread.IsBackground = true;
@@ -93,24 +102,30 @@ public class GameManager : MonoBehaviour
 
     void SendMove(int coluna)
     {
-        try
+        // Enviar em thread pool (já é seguro, mas é boa prática para IO)
+        ThreadPool.QueueUserWorkItem(_ =>
         {
-            TcpClient client = new TcpClient();
-            client.Connect(otherIp, listenPort);
+            try
+            {
+                TcpClient client = new TcpClient();
+                client.Connect(otherIp, listenPort);
 
-            NetworkStream stream = client.GetStream();
-            byte[] message = Encoding.UTF8.GetBytes(coluna.ToString());
-            stream.Write(message, 0, message.Length);
+                NetworkStream stream = client.GetStream();
+                byte[] message = Encoding.UTF8.GetBytes(coluna.ToString());
+                stream.Write(message, 0, message.Length);
 
-            stream.Close();
-            client.Close();
+                stream.Close();
+                client.Close();
 
-            Debug.Log("[P2P] Jogada enviada: " + coluna);
-        }
-        catch (Exception e)
-        {
-            Debug.LogError("[P2P] Erro ao enviar jogada: " + e.Message);
-        }
+                Debug.Log("[P2P] Jogada enviada: " + coluna);
+            }
+            catch (Exception e)
+            {
+                // CORRIGIDO: Garante que o log de erro seja executado na Main Thread
+                if (UnityMainThreadDispatcher.Exists())
+                    UnityMainThreadDispatcher.Instance().Enqueue(() => Debug.LogError("[P2P] Erro ao enviar jogada: " + e.Message));
+            }
+        });
     }
 
     private void Update()
@@ -205,9 +220,25 @@ public class GameManager : MonoBehaviour
     {
         try
         {
-            server?.Stop();
-            listenThread?.Abort();
+            // CORRIGIDO: Apenas para a escuta. O Stop() irá lançar uma exceção de interrupção que a thread catch
+            server?.Stop(); 
         }
         catch { }
+        // Evitamos listenThread?.Abort()
+    }
+
+    // Adicionado um método de exemplo para o botão de voz (Voice Chat)
+    public void OnVoiceButtonClick()
+    {
+        // Alterna entre iniciar e parar, se você tiver um botão de "push-to-talk"
+        // Este é apenas um exemplo:
+        if (Microphone.IsRecording(VoiceChatUDP.Instance.micDevice))
+        {
+            VoiceChatUDP.Instance.EndRecordingAndSend();
+        }
+        else
+        {
+            VoiceChatUDP.Instance.BeginRecording();
+        }
     }
 }
