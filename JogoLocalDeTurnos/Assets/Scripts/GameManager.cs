@@ -21,7 +21,7 @@ public class GameManager : MonoBehaviour
     Board myBoard;
 
     // TCP P2P
-    TcpListener server;
+    TcpListener server; 
     Thread listenThread;
     int listenPort = 5050;
     string otherIp = "10.57.1.134"; // coloque o IP real
